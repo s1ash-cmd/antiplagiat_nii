@@ -7,8 +7,7 @@ import io
 import base64
 import sys
 import datetime
-from zeep import Client
-from zeep.transports import Transport
+from suds.client import Client
 import requests
 
 
@@ -92,23 +91,19 @@ class AntiplagiatClient:
     def __init__(self, login,
                  password,
                  company_name,
-                 apicorp_address="api.antiplagiat.ru:4959"):
+                 apicorp_address="api.antiplagiat.ru:4959",
+                 antiplagiat_uri="https://testapi.antiplagiat.ru"):
 
-        self.login = login
-        self.password = password
+        self.antiplagiat_uri = antiplagiat_uri
+        self.login = "testapi@antiplagiat.ru"
+        self.password = "testapi"
         self.company_name = company_name
         self.apicorp_address = apicorp_address
 
-        wsdl_url = f'https://{self.apicorp_address}/apiCorp/{self.company_name}?wsdl'
-
-        session = requests.Session()
-        session.verify = False
-        session.auth = (self.login, self.password)
-
-        transport = Transport(session=session)
-        self.client = Client(wsdl=wsdl_url, transport=transport)
+        self.client = Client(f'https://{self.apicorp_address}/apiCorp/{self.company_name}?singleWsdl',
+                                         username=self.login,
+                                         password=self.password)
         print("SOAP клиент создан")
-
 
     def _get_doc_data(self, filename: str, external_user_id: str):
         data = self.client.factory.create("DocData")
@@ -140,7 +135,6 @@ class AntiplagiatClient:
         arr.AuthorName.append(author)
 
         docatr.DocumentDescription.Authors = arr
-
         # Загрузка файла
         try:
             uploadResult = self.client.service.UploadDocument(data, docatr)
