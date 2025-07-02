@@ -10,6 +10,14 @@ import datetime
 from zeep import Client
 from zeep.transports import Transport
 import requests
+
+
+from libs.schemas import SimpleCheckResult, Service, Source, Author, LoanBlock
+from libs.logger import logger
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
 from typing import List, Optional
 from pydantic import BaseModel
 import logging
@@ -102,6 +110,48 @@ class AntiplagiatClient:
         print("SOAP клиент создан")
 
 
+    def _get_doc_data(self, filename: str, external_user_id: str):
+        data = self.client.factory.create("DocData")
+        data.Data = base64.b64encode(open(filename, "rb").read()).decode()
+        data.FileName = os.path.splitext(filename)[0]
+        data.FileType = os.path.splitext(filename)[1]
+        data.ExternalUserID = external_user_id
+        return data
+
+    def add_to_index(self, filename: str, author_surname='',
+                     author_other_names='',
+                     external_user_id='ivanov', custom_id='original'
+                     ) -> SimpleCheckResult:
+        logger.info("SimpleCheck filename=" + filename)
+
+        data = self._get_doc_data(filename, external_user_id=external_user_id)
+
+        docatr = self.client.factory.create("DocAttributes")
+        personIds = self.client.factory.create("PersonIDs")
+        personIds.CustomID = custom_id
+
+        arr = self.client.factory.create("ArrayOfAuthorName")
+
+        author = self.client.factory.create("AuthorName")
+        author.OtherNames = author_other_names
+        author.Surname = author_surname
+        author.PersonIDs = personIds
+
+        arr.AuthorName.append(author)
+
+        docatr.DocumentDescription.Authors = arr
+
+        # Загрузка файла
+        try:
+            uploadResult = self.client.service.UploadDocument(data, docatr)
+
+        except Exception:
+            raise
+
+        # Идентификатор документа. Если загружается не архив, то список загруженных документов будет состоять из одного элемента.
+        id = uploadResult.Uploaded[0].Id
+        return id
+
     def get_doc_data(self, filename: str, external_user_id: str):
         data = {
             "Data": base64.b64encode(open(filename, "rb").read()).decode(),
@@ -121,7 +171,35 @@ if __name__ == "__main__":
         company_name="testapi"
     )
 
+
+    while True:
+
+        print("\n$____________________Меню____________________$")
+        print("1. Загрузить и индексировать документ;")
+        print("2. Проверить на оригинальность и получить отчет;")
+        print("0. Выход.")
+
+        num = int(input("Введите пункт меню: "))
+
+        if num == 1:
+            filename = input("Введите название файла для индексации: ")
+            id_index = AntiplagiatClient.add_to_index(client, filename)
+            print("Идентификатор добавленного в индекс документа: " + str(id_index))
+
+        elif num == 2:
+            # filename =
+            #
+            # print("Отчет: " + str(id_index))
+            print("Отчет:")
+
+        elif num == 0:
+            print("Выход.")
+
+        else:
+            print("Неверный запрос. Введите номер пункта из меню.")
+
     print("\n$______________________Меню______________________$")
     print("1. Загрузить и индексировать документ")
     print("2. Проверить на оригинальность и получить отчет")
     print("0. Выход")
+
