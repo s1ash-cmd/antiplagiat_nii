@@ -43,11 +43,11 @@ class AntiplagiatClient:
 
     def _get_doc_data(self, filename: str, external_user_id: str):
         return self.factory.DocData(
-            Data=base64.b64encode(open(filename, "rb").read()).decode(),
-            FileName=os.path.splitext(filename)[0],
-            FileType=os.path.splitext(filename)[1],
-            ExternalUserID=external_user_id
-        )
+        Data=base64.b64encode(open(filename, "rb").read()).decode(),
+        FileName = os.path.splitext(filename)[0],
+        FileType = os.path.splitext(filename)[1],
+        ExternalUserID = external_user_id
+    )
 
     def add_to_index(self, filename: str, author_surname='',
                      author_other_names='',
@@ -57,20 +57,18 @@ class AntiplagiatClient:
 
         data = self._get_doc_data(filename, external_user_id=external_user_id)
 
-        docatr = self.client.factory.create("DocAttributes")
-        personIds = self.client.factory.create("PersonIDs")
-        personIds.CustomID = custom_id
-
-        arr = self.client.factory.create("ArrayOfAuthorName")
-
-        author = self.client.factory.create("AuthorName")
-        author.OtherNames = author_other_names
-        author.Surname = author_surname
-        author.PersonIDs = personIds
-
+        personIds = self.factory.PersonIDs(CustomID=custom_id)
+        docatr = self.factory.DocAttributes()
+        arr = self.factory.ArrayOfAuthorName()
+        author = self.factory.AuthorName(
+            OtherNames = author_other_names,
+            Surname = author_surname,
+            PersonIDs = personIds
+            )
         arr.AuthorName.append(author)
-
-        docatr.DocumentDescription.Authors = arr
+        docatr.DocumentDescription = {
+            'Authors': arr
+            }
         # Загрузка файла
         try:
             uploadResult = self.client.service.UploadDocument(data, docatr)
@@ -79,9 +77,13 @@ class AntiplagiatClient:
             raise
 
         # Идентификатор документа. Если загружается не архив, то список загруженных документов будет состоять из одного элемента.
-        id = uploadResult.Uploaded[0].Id
-        print (id)
+        try:
+            id = uploadResult.Uploaded[0].Id
 
+        except AttributeError:
+            id = uploadResult[0].Id
+
+        print(id)
         self.client.service.CheckDocument(id)
 
             # Получить текущий статус последней проверки
@@ -103,7 +105,8 @@ class AntiplagiatClient:
         result = SimpleCheckResult(filename=os.path.basename(filename),
                                    plagiarism=f'{report.Summary.Score:.2f}%',
                                    services=[],
-                                   author=Author())
+                                   author=Author(surname="", othernames="", custom_id=""),
+                                   loan_blocks=[])
 
         for checkService in report.CheckServiceResults:
             # Информация по каждому поисковому модулю
@@ -137,11 +140,12 @@ class AntiplagiatClient:
                 # Получить полный отчет
             result.services.append(service)
 
-        options = self.client.factory.create("ReportViewOptions")
-        options.FullReport = True
-        options.NeedText = True
-        options.NeedStats = True
-        options.NeedAttributes = True
+        options = self.factory.ReportViewOptions(
+            FullReport = True,
+            NeedText = True,
+            NeedStats = True,
+            NeedAttributes = True
+            )
         fullreport = self.client.service.GetReportView(id, options)
 
         logger.info(f"Author Surname={fullreport.Attributes.DocumentDescription.Authors.AuthorName[0].Surname} "
@@ -161,7 +165,7 @@ class AntiplagiatClient:
                 loan_blocks.append(loan_block)
         result.loan_blocks = loan_blocks
 
-        return result.dict()
+        return result.model_dump()
 
 
 if __name__ == "__main__":
