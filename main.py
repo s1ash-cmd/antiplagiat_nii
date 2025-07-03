@@ -114,7 +114,8 @@ class AntiplagiatClient:
             plagiarism_score=f'{report.Summary.Score:.2f}%',
             services=[],
             author=Author(surname="", other_names="", custom_id=""),
-            loan_blocks=[]
+            loan_blocks=[],
+            pdf_link = ''
         )
 
 
@@ -177,7 +178,35 @@ class AntiplagiatClient:
 
         result.loan_blocks = loan_blocks
 
+        # Запросить формирование последнего полного отчета в формат PDF.
+        exportReportInfo = self.client.service.ExportReportToPdf(doc_id)
+
+        while exportReportInfo.Status == "InProgress":
+            time.sleep(max(exportReportInfo.EstimatedWaitTime, 10) * 0.1)
+            exportReportInfo = self.client.service.ExportReportToPdf(doc_id)
+
+        # Формирование отчета закончилось неудачно.
+        if exportReportInfo.Status == "Failed":
+            print("При формировании PDF-отчета для документа %s произошла ошибка: %s" % (filename, exportReportInfo.FailDetails))
+
+        pdf_path = self.download_report(exportReportInfo.DownloadLink, f"report_{doc_id.Id}.pdf")
+        print(f"PDF отчёт сохранён: {pdf_path}")
+
+
+        result.pdf_link = f"{self.antiplagiat_uri}{exportReportInfo.DownloadLink}"
+
         return result.model_dump()
+
+    def download_report(self, download_link: str, dest: str):
+        url = f"{self.antiplagiat_uri}{download_link}"
+        # Та же сессия, что и для SOAP
+        resp = self.client.transport.session.get(url, verify=False)
+        resp.raise_for_status()
+
+        with open(dest, "wb") as f:
+            f.write(resp.content)
+        logger.info(f"Отчёт сохранён в {dest}")
+        return dest
 
 if __name__ == "__main__":
     client = AntiplagiatClient(

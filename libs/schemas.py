@@ -31,5 +31,6 @@ class SimpleCheckResult(BaseModel):
     services: List[Service]
     author: Optional[Author]
     loan_blocks: Optional[List[LoanBlock]]
+    pdf_link: Optional[str]
 
 
