@@ -10,14 +10,14 @@ class Source(BaseModel):
     url: Optional[str]
 
 class Service(BaseModel):
-    service_name: str
+    name: str
     originality: str
     plagiarism: str
-    source: Optional[List]
+    sources: Optional[List]
 
 class Author(BaseModel):
     surname: Optional[str]
-    othernames: Optional[str]
+    other_names: Optional[str]
     custom_id: Optional[str]
 
 class LoanBlock(BaseModel):
@@ -27,7 +27,7 @@ class LoanBlock(BaseModel):
 
 class SimpleCheckResult(BaseModel):
     filename: str
-    plagiarism: str
+    plagiarism_score: str
     services: List[Service]
     author: Optional[Author]
     loan_blocks: Optional[List[LoanBlock]]

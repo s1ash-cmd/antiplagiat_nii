@@ -51,19 +51,18 @@ class AntiplagiatClient:
         data = self._get_doc_data(filename, external_user_id=external_user_id)
 
         person_ids = self.factory.PersonIDs(CustomID=custom_id)
+        docatr = self.factory.DocAttributes()
+        arr = self.factory.ArrayOfAuthorName()
         author = self.factory.AuthorName(
             OtherNames=author_other_names,
             Surname=author_surname,
             PersonIDs=person_ids
         )
-        authors_array = self.factory.ArrayOfAuthorName()
-        authors_array.AuthorName.append(author)
-
-        doc_attrs = self.factory.DocAttributes()
-        doc_attrs.DocumentDescription = {'Authors': authors_array}
+        arr.AuthorName.append(author)
+        docatr.DocumentDescription = {'Authors': arr}
 
         try:
-            upload_result = self.client.service.UploadDocument(data, doc_attrs)
+            upload_result = self.client.service.UploadDocument(data, docatr)
         except Fault as e:
             logger.error(f"SOAP Fault during upload: {e}")
             raise
@@ -101,65 +100,84 @@ class AntiplagiatClient:
 
         status = self.client.service.GetCheckStatus(doc_id)
         while status.Status == "InProgress":
-            wait = getattr(status, 'EstimatedWaitTime', 1)
-            time.sleep(wait * 0.1)
+            time.sleep(status.EstimatedWaitTime * 0.1)
             status = self.client.service.GetCheckStatus(doc_id)
 
         if status.Status == "Failed":
-            logger.error(f"Validation failed for document {doc_id.Id}: {status.FailDetails}")
-            raise RuntimeError(f"Plagiarism check failed: {status.FailDetails}")
+            logger.error(f"An error occurred while validating the document ID {doc_id.Id}: {status.FailDetails}")
 
         report = self.client.service.GetReportView(doc_id)
         logger.info(f"Report Summary: {report.Summary.Score:.2f}%")
 
-        result = {
-            'plagiarism_score': f"{report.Summary.Score:.2f}%",
-            'services': [],
-            'author': {},
-            'loan_blocks': []
-        }
+        result = SimpleCheckResult(
+            filename='',
+            plagiarism_score=f'{report.Summary.Score:.2f}%',
+            services=[],
+            author=Author(surname="", other_names="", custom_id=""),  # 👈 подчёркивание!
+            loan_blocks=[]
+        )
 
-        for service_res in getattr(report, 'CheckServiceResults', []) or []:
-            svc = {
-                'name': service_res.CheckServiceName,
-                'originality': f"{service_res.ScoreByReport.Legal:.2f}%",
-                'plagiarism': f"{service_res.ScoreByReport.Plagiarism:.2f}%",
-                'sources': []
-            }
-            for src in getattr(service_res, 'Sources', []) or []:
-                svc['sources'].append({
-                    'hash': src.SrcHash,
-                    'name': src.Name,
-                    'author': src.Author,
-                    'url': src.Url,
-                    'score_by_report': f"{src.ScoreByReport:.2f}%",
-                    'score_by_source': f"{src.ScoreBySource:.2f}%"
-                })
-            result['services'].append(svc)
 
-        opts = self.factory.ReportViewOptions(
+        for checkService in getattr(report, 'CheckServiceResults', []) or []:
+            service = Service(
+                name=checkService.CheckServiceName,
+                originality=f'{checkService.ScoreByReport.Legal:.2f}%',
+                plagiarism=f'{checkService.ScoreByReport.Plagiarism:.2f}%',
+                sources=[]
+            )
+
+            logger.info(
+                f"Check service: {checkService.CheckServiceName}, "
+                f"Score.White={checkService.ScoreByReport.Legal:.2f}% "
+                f"Score.Black={checkService.ScoreByReport.Plagiarism:.2f}%"
+            )
+
+            for source in getattr(checkService, 'Sources', []) or []:
+                _source = Source(
+                    hash=source.SrcHash,
+                    score_by_report=f'{source.ScoreByReport:.2f}%',
+                    score_by_source=f'{source.ScoreBySource:.2f}%',
+                    name=source.Name,
+                    author=source.Author,
+                    url=source.Url
+                )
+
+                service.sources.append(_source)
+
+                logger.info(
+                    f'\t{source.SrcHash}: Score={source.ScoreByReport:.2f}%({source.ScoreBySource:.2f}%), '
+                    f'Name="{source.Name}" Author="{source.Author}" Url="{source.Url}"'
+                )
+
+            result.services.append(service)
+
+        options = self.factory.ReportViewOptions(
             FullReport=True,
             NeedText=True,
             NeedStats=True,
             NeedAttributes=True
         )
-        full = self.client.service.GetReportView(doc_id, opts)
-        author_info = full.Attributes.DocumentDescription.Authors.AuthorName[0]
-        result['author'] = {
-            'surname': author_info.Surname,
-            'other_names': author_info.OtherNames,
-            'custom_id': author_info.PersonIDs.CustomID
-        }
 
-        for block in getattr(full.Details, 'CiteBlocks', []) or []:
-            text_block = full.Details.Text[block.Offset:block.Offset + block.Length]
-            result['loan_blocks'].append({
-                'offset': block.Offset,
-                'length': block.Length,
-                'text': text_block
-            })
+        fullreport = self.client.service.GetReportView(doc_id, options)
 
-        return result
+        author_info = fullreport.Attributes.DocumentDescription.Authors.AuthorName[0]
+        result.author.surname = author_info.Surname
+        result.author.other_names = author_info.OtherNames
+        result.author.custom_id = author_info.PersonIDs.CustomID
+
+        loan_blocks = []
+        for block in getattr(fullreport.Details, 'CiteBlocks', []) or []:
+            text = fullreport.Details.Text[block.Offset:block.Offset + block.Length]
+            loan_block = LoanBlock(
+                text=text,
+                offset=block.Offset,
+                length=block.Length
+            )
+            loan_blocks.append(loan_block)
+
+        result.loan_blocks = loan_blocks
+
+        return result.model_dump()
 
 if __name__ == "__main__":
     client = AntiplagiatClient(
