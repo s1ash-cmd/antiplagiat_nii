@@ -17,7 +17,7 @@ class Service(BaseModel):
 
 class Author(BaseModel):
     surname: Optional[str]
-    othernames: Optional[str]
+    other_names: Optional[str]
     custom_id: Optional[str]
 
 class LoanBlock(BaseModel):

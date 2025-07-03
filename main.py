@@ -109,54 +109,80 @@ class AntiplagiatClient:
         report = self.client.service.GetReportView(doc_id)
         logger.info(f"Report Summary: {report.Summary.Score:.2f}%")
 
-        # result = {
-        #     'plagiarism_score': f"{report.Summary.Score:.2f}%",
-        #     'services': [],
-        #     'author': {},
-        #     'loan_blocks': []
-        # }
-        #
-        # for service_res in getattr(report, 'CheckServiceResults', []) or []:
-        #     svc = {
-        #         'name': service_res.CheckServiceName,
-        #         'originality': f"{service_res.ScoreByReport.Legal:.2f}%",
-        #         'plagiarism': f"{service_res.ScoreByReport.Plagiarism:.2f}%",
-        #         'sources': []
-        #     }
-        #     for src in getattr(service_res, 'Sources', []) or []:
-        #         svc['sources'].append({
-        #             'hash': src.SrcHash,
-        #             'name': src.Name,
-        #             'author': src.Author,
-        #             'url': src.Url,
-        #             'score_by_report': f"{src.ScoreByReport:.2f}%",
-        #             'score_by_source': f"{src.ScoreBySource:.2f}%"
-        #         })
-        #     result['services'].append(svc)
-        #
-        # opts = self.factory.ReportViewOptions(
-        #     FullReport=True,
-        #     NeedText=True,
-        #     NeedStats=True,
-        #     NeedAttributes=True
-        # )
-        # full = self.client.service.GetReportView(doc_id, opts)
-        # author_info = full.Attributes.DocumentDescription.Authors.AuthorName[0]
-        # result['author'] = {
-        #     'surname': author_info.Surname,
-        #     'other_names': author_info.OtherNames,
-        #     'custom_id': author_info.PersonIDs.CustomID
-        # }
-        #
-        # for block in getattr(full.Details, 'CiteBlocks', []) or []:
-        #     text_block = full.Details.Text[block.Offset:block.Offset + block.Length]
-        #     result['loan_blocks'].append({
-        #         'offset': block.Offset,
-        #         'length': block.Length,
-        #         'text': text_block
-        #     })
-        #
-        # return result
+        result = {
+            'plagiarism_score': f"{report.Summary.Score:.2f}%",
+            'services': [],
+            'author': {},
+            'loan_blocks': []
+        }
+
+        for service_res in getattr(report, 'CheckServiceResults', []) or []:
+            svc = {
+                'name': service_res.CheckServiceName,
+                'originality': f"{service_res.ScoreByReport.Legal:.2f}%",
+                'plagiarism': f"{service_res.ScoreByReport.Plagiarism:.2f}%",
+                'sources': []
+            }
+            for src in getattr(service_res, 'Sources', []) or []:
+                svc['sources'].append({
+                    'hash': src.SrcHash,
+                    'name': src.Name,
+                    'author': src.Author,
+                    'url': src.Url,
+                    'score_by_report': f"{src.ScoreByReport:.2f}%",
+                    'score_by_source': f"{src.ScoreBySource:.2f}%"
+                })
+            result['services'].append(svc)
+
+        opts = self.factory.ReportViewOptions(
+            FullReport=True,
+            NeedText=True,
+            NeedStats=True,
+            NeedAttributes=True
+        )
+        full = self.client.service.GetReportView(doc_id, opts)
+        author_info = full.Attributes.DocumentDescription.Authors.AuthorName[0]
+        result['author'] = {
+            'surname': author_info.Surname,
+            'other_names': author_info.OtherNames,
+            'custom_id': author_info.PersonIDs.CustomID
+        }
+
+        for block in getattr(full.Details, 'CiteBlocks', []) or []:
+            text_block = full.Details.Text[block.Offset:block.Offset + block.Length]
+            result['loan_blocks'].append({
+                'offset': block.Offset,
+                'length': block.Length,
+                'text': text_block
+            })
+
+        # Запросить формирование последнего полного отчета в формат PDF.
+        exportReportInfo = self.client.service.ExportReportToPdf(doc_id)
+
+        while exportReportInfo.Status == "InProgress":
+            time.sleep(max(exportReportInfo.EstimatedWaitTime, 10) * 0.1)
+            exportReportInfo = self.client.service.ExportReportToPdf(doc_id)
+
+        # Формирование отчета закончилось неудачно.
+        if exportReportInfo.Status == "Failed":
+            print("При формировании PDF-отчета для документа %s произошла ошибка: %s" % (filename, exportReportInfo.FailDetails))
+
+        pdf_path = self.download_report(exportReportInfo.DownloadLink, f"report_{doc_id.Id}.pdf")
+        print(f"PDF отчёт сохранён: {pdf_path}")
+
+        result['pdf_link'] = exportReportInfo.DownloadLink
+        return result
+
+    def download_report(self, download_link: str, dest: str):
+        url = f"{self.antiplagiat_uri}{download_link}"
+        # Та же сессия, что и для SOAP
+        resp = self.client.transport.session.get(url, verify=False)
+        resp.raise_for_status()
+
+        with open(dest, "wb") as f:
+            f.write(resp.content)
+        logger.info(f"Отчёт сохранён в {dest}")
+        return dest
 
 if __name__ == "__main__":
     client = AntiplagiatClient(
