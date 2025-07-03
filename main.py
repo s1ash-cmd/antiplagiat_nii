@@ -1,14 +1,10 @@
-﻿import os
-import suds
+import os
 import time
 import base64
 import urllib3
-import io
-import base64
-import sys
-import datetime
 from zeep import Client
 from zeep.transports import Transport
+from zeep.exceptions import Fault
 import requests
 
 from libs.schemas import SimpleCheckResult, Service, Source, Author, LoanBlock
@@ -22,10 +18,9 @@ class AntiplagiatClient:
                  company_name,
                  apicorp_address="api.antiplagiat.ru:4959",
                  antiplagiat_uri="https://testapi.antiplagiat.ru"):
-
         self.antiplagiat_uri = antiplagiat_uri
-        self.login = "testapi@antiplagiat.ru"
-        self.password = "testapi"
+        self.login = login
+        self.password = password
         self.company_name = company_name
         self.apicorp_address = apicorp_address
 
@@ -37,136 +32,134 @@ class AntiplagiatClient:
 
         transport = Transport(session=session)
         self.client = Client(wsdl=wsdl_url, transport=transport)
-
         self.factory = self.client.type_factory('ns0')
         print("SOAP клиент создан")
 
     def _get_doc_data(self, filename: str, external_user_id: str):
         return self.factory.DocData(
-        Data=base64.b64encode(open(filename, "rb").read()).decode(),
-        FileName = os.path.splitext(filename)[0],
-        FileType = os.path.splitext(filename)[1],
-        ExternalUserID = external_user_id
-    )
+            Data=base64.b64encode(open(filename, "rb").read()).decode(),
+            FileName=os.path.splitext(filename)[0],
+            FileType=os.path.splitext(filename)[1],
+            ExternalUserID=external_user_id
+        )
 
-    def add_to_index(self, filename: str, author_surname='',
-                     author_other_names='',
-                     external_user_id='ivanov', custom_id='original'
-                     ) -> SimpleCheckResult:
-        logger.info("SimpleCheck filename=" + filename)
-
+    def add_to_index(self, filename: str, author_surname: str = '',
+                     author_other_names: str = '',
+                     external_user_id: str = 'ivanov',
+                     custom_id: str = 'original') -> object:
+        logger.info(f"Indexing document: {filename}")
         data = self._get_doc_data(filename, external_user_id=external_user_id)
 
-        personIds = self.factory.PersonIDs(CustomID=custom_id)
-        docatr = self.factory.DocAttributes()
-        arr = self.factory.ArrayOfAuthorName()
+        person_ids = self.factory.PersonIDs(CustomID=custom_id)
         author = self.factory.AuthorName(
-            OtherNames = author_other_names,
-            Surname = author_surname,
-            PersonIDs = personIds
-            )
-        arr.AuthorName.append(author)
-        docatr.DocumentDescription = {
-            'Authors': arr
-            }
-        # Загрузка файла
-        try:
-            uploadResult = self.client.service.UploadDocument(data, docatr)
+            OtherNames=author_other_names,
+            Surname=author_surname,
+            PersonIDs=person_ids
+        )
+        authors_array = self.factory.ArrayOfAuthorName()
+        authors_array.AuthorName.append(author)
 
+        doc_attrs = self.factory.DocAttributes()
+        doc_attrs.DocumentDescription = {'Authors': authors_array}
+
+        try:
+            upload_result = self.client.service.UploadDocument(data, doc_attrs)
+        except Fault as e:
+            logger.error(f"SOAP Fault during upload: {e}")
+            raise
         except Exception:
+            logger.exception("Failed to upload document")
             raise
 
-        # Идентификатор документа. Если загружается не архив, то список загруженных документов будет состоять из одного элемента.
         try:
-            id = uploadResult.Uploaded[0].Id
+            uploaded = upload_result.Uploaded[0]
+        except (AttributeError, IndexError):
+            uploaded = upload_result[0]
 
-        except AttributeError:
-            id = uploadResult[0].Id
+        def get_id(obj):
+            if hasattr(obj, 'Id'):
+                return obj.Id
+            if isinstance(obj, dict) and 'Id' in obj:
+                return obj['Id']
+            return obj
 
-        print(id)
-        self.client.service.CheckDocument(id)
+        doc_id_val = get_id(get_id(uploaded))
 
-            # Получить текущий статус последней проверки
-        status = self.client.service.GetCheckStatus(id)
+        doc_id = self.factory.DocumentId(Id=doc_id_val, External=None)
+        logger.info(f"Indexed document ID: {doc_id_val}")
 
-        # Цикл ожидания окончания проверки
+        return doc_id
+
+    def check_by_id(self, doc_id: object) -> dict:
+        logger.info(f"Starting check for document ID: {doc_id.Id}")
+
+        try:
+            self.client.service.CheckDocument(doc_id)
+        except Fault as e:
+            logger.error(f"SOAP Fault during check start: {e}")
+            raise
+
+        status = self.client.service.GetCheckStatus(doc_id)
         while status.Status == "InProgress":
-            time.sleep(status.EstimatedWaitTime * 0.1)
-            status = self.client.service.GetCheckStatus(id)
+            wait = getattr(status, 'EstimatedWaitTime', 1)
+            time.sleep(wait * 0.1)
+            status = self.client.service.GetCheckStatus(doc_id)
 
-        # Проверка закончилась не удачно.
         if status.Status == "Failed":
-            logger.error(f"An error occurred while validating the document {filename}: {status.FailDetails}")
+            logger.error(f"Validation failed for document {doc_id.Id}: {status.FailDetails}")
+            raise RuntimeError(f"Plagiarism check failed: {status.FailDetails}")
 
-        # Получить краткий отчет
-        report = self.client.service.GetReportView(id)
-
+        report = self.client.service.GetReportView(doc_id)
         logger.info(f"Report Summary: {report.Summary.Score:.2f}%")
-        result = SimpleCheckResult(filename=os.path.basename(filename),
-                                   plagiarism=f'{report.Summary.Score:.2f}%',
-                                   services=[],
-                                   author=Author(surname="", othernames="", custom_id=""),
-                                   loan_blocks=[])
 
-        for checkService in report.CheckServiceResults:
-            # Информация по каждому поисковому модулю
+        result = {
+            'plagiarism_score': f"{report.Summary.Score:.2f}%",
+            'services': [],
+            'author': {},
+            'loan_blocks': []
+        }
 
-            service = Service(service_name=checkService.CheckServiceName,
-                              originality=f'{checkService.ScoreByReport.Legal:.2f}%',
-                              plagiarism=f'{checkService.ScoreByReport.Plagiarism:.2f}%',
-                              source=[])
+        for service_res in getattr(report, 'CheckServiceResults', []) or []:
+            svc = {
+                'name': service_res.CheckServiceName,
+                'originality': f"{service_res.ScoreByReport.Legal:.2f}%",
+                'plagiarism': f"{service_res.ScoreByReport.Plagiarism:.2f}%",
+                'sources': []
+            }
+            for src in getattr(service_res, 'Sources', []) or []:
+                svc['sources'].append({
+                    'hash': src.SrcHash,
+                    'name': src.Name,
+                    'author': src.Author,
+                    'url': src.Url,
+                    'score_by_report': f"{src.ScoreByReport:.2f}%",
+                    'score_by_source': f"{src.ScoreBySource:.2f}%"
+                })
+            result['services'].append(svc)
 
-            logger.info(f"Check service: {checkService.CheckServiceName}, "
-                        f"Score.White={checkService.ScoreByReport.Legal:.2f}% "
-                        f"Score.Black={checkService.ScoreByReport.Plagiarism:.2f}%")
-            if not hasattr(checkService, "Sources"):
-                result.services.append(service)
-                continue
-            for source in checkService.Sources:
-                _source = Source(hash=source.SrcHash,
-                                 score_by_report=f'{source.ScoreByReport:.2f}%',
-                                 score_by_source=f'{source.ScoreBySource:.2f}%',
-                                 name=source.Name,
-                                 author=source.Author,
-                                 url=source.Url)
+        opts = self.factory.ReportViewOptions(
+            FullReport=True,
+            NeedText=True,
+            NeedStats=True,
+            NeedAttributes=True
+        )
+        full = self.client.service.GetReportView(doc_id, opts)
+        author_info = full.Attributes.DocumentDescription.Authors.AuthorName[0]
+        result['author'] = {
+            'surname': author_info.Surname,
+            'other_names': author_info.OtherNames,
+            'custom_id': author_info.PersonIDs.CustomID
+        }
 
-                service.source.append(_source)
-                # Информация по каждому найденному источнику
-                logger.info(
-                    f'\t{source.SrcHash}: Score={source.ScoreByReport:.2f}%({source.ScoreBySource:.2f}%), '
-                    f'Name="{source.Name}" Author="{source.Author}"'
-                    f' Url="{source.Url}"')
+        for block in getattr(full.Details, 'CiteBlocks', []) or []:
+            text_block = full.Details.Text[block.Offset:block.Offset + block.Length]
+            result['loan_blocks'].append({
+                'offset': block.Offset,
+                'length': block.Length,
+                'text': text_block
+            })
 
-                # Получить полный отчет
-            result.services.append(service)
-
-        options = self.factory.ReportViewOptions(
-            FullReport = True,
-            NeedText = True,
-            NeedStats = True,
-            NeedAttributes = True
-            )
-        fullreport = self.client.service.GetReportView(id, options)
-
-        logger.info(f"Author Surname={fullreport.Attributes.DocumentDescription.Authors.AuthorName[0].Surname} "
-                    f"OtherNames={fullreport.Attributes.DocumentDescription.Authors.AuthorName[0].OtherNames} "
-                    f"CustomID={fullreport.Attributes.DocumentDescription.Authors.AuthorName[0].PersonIDs.CustomID}")
-
-        result.author.surname = fullreport.Attributes.DocumentDescription.Authors.AuthorName[0].Surname
-        result.author.othernames = fullreport.Attributes.DocumentDescription.Authors.AuthorName[0].OtherNames
-        result.author.custom_id = fullreport.Attributes.DocumentDescription.Authors.AuthorName[0].PersonIDs.CustomID
-
-        loan_blocks = []
-        if fullreport.Details.CiteBlocks:
-            for block in fullreport.Details.CiteBlocks:
-                loan_block = LoanBlock(text=fullreport.Details.Text[block.Offset:block.Offset + block.Length],
-                                       offset=block.Offset,
-                                       length=block.Length)
-                loan_blocks.append(loan_block)
-        result.loan_blocks = loan_blocks
-
-        return result.model_dump()
-
+        return result
 
 if __name__ == "__main__":
     client = AntiplagiatClient(
@@ -177,32 +170,104 @@ if __name__ == "__main__":
 
     while True:
         print("\n$____________________Меню____________________$")
-        print("1. Загрузить и индексировать документ;")
-        print("2. Проверить на оригинальность и получить отчет;")
+        print("1. Индексировать документ;")
+        print("2. Проверить на оригинальность по id;")
+        print("3. Загрузить и проверить документ;")
         print("0. Выход.")
 
-        while True:
-            num = input("Введите пункт меню: ")
-            try:
-                num = int(num)
-                break
-            except ValueError:
-                print("Введите номер пункта из меню!")
-
-        if num == 1:
+        choice = input("Введите пункт меню: ")
+        if choice == '1':
             filename = input("Введите название файла для индексации: ")
-            id_index = AntiplagiatClient.add_to_index(client, filename)
-            print("Идентификатор добавленного в индекс документа: " + str(id_index))
+            author_surname = input("Введите фамилию автора: ")
+            author_other_names = input("Введите имя автора: ")
+            external_user_id = input("Введите внешний ID пользователя: ")
+            custom_id = input("Введите пользовательский ID (custom_id): ")
+            try:
+                doc_id = client.add_to_index(
+                    filename,
+                    author_surname=author_surname,
+                    author_other_names=author_other_names,
+                    external_user_id=external_user_id,
+                    custom_id=custom_id
+                )
+                print(f"Идентификатор добавленного в индекс документа: {doc_id.Id}")
+            except Exception as e:
+                print(f"Ошибка при индексации: {e}")
 
-        elif num == 2:
-            # filename =
-            #
-            # print("Отчет: " + str(id_index))
-            print("Отчет:")
+        elif choice == '2':
+            raw_id = int(input("Введите ID документа для проверки: "))
+            doc_id = client.factory.DocumentId(Id=raw_id, External=None)
+            try:
+                report = client.check_by_id(doc_id)
+                print("\nОтчет проверки:")
+                print(f"Общий процент плагиата: {report['plagiarism_score']}")
+                print("\nРезультаты по сервисам:")
+                for svc in report['services']:
+                    print(f"Сервис: {svc['name']}")
+                    print(f"Оригинальность: {svc['originality']}")
+                    print(f"Плагиат: {svc['plagiarism']}")
+                    if svc['sources']:
+                        print("    Источники:")
+                        for src in svc['sources']:
+                            print(f"      - {src['name']} ({src['url']})")
+                            print(f"Оценка по отчету: {src['score_by_report']}")
+                            print(f"Оценка по источнику: {src['score_by_source']}")
+                print(f"\nАвтор: {report['author']['surname']} {report['author']['other_names']} (custom_id: {report['author']['custom_id']})")
+                if report['loan_blocks']:
+                    print("\nНайденные заимствованные блоки текста:")
+                    for i, block in enumerate(report['loan_blocks'], 1):
+                        print(f"Блок {i}:")
+                        print(f"Offset: {block['offset']}, длина: {block['length']}")
+                        print(f"Текст: {block['text'][:100]}..." if len(block['text']) > 100 else f"    Текст: {block['text']}")
+            except Exception as e:
+                print(f"Ошибка при проверке: {e}")
 
-        elif num == 0:
+
+        elif choice == '3':
+            filename = input("Введите путь к файлу: ")
+            author_surname = input("Введите фамилию автора: ")
+            author_other_names = input("Введите имя автора: ")
+            external_user_id = input("Введите внешний ID пользователя: ")
+            custom_id = input("Введите пользовательский ID (custom_id): ")
+            try:
+                # Индексируем и получаем объект DocumentId
+                doc_id = client.add_to_index(
+                    filename,
+                    author_surname=author_surname,
+                    author_other_names=author_other_names,
+                    external_user_id=external_user_id,
+                    custom_id=custom_id
+                )
+                print(f"Документ добавлен в индекс с ID: {doc_id.Id}")
+
+                # Проверяем документ
+                report = client.check_by_id(doc_id)
+                print("\nОтчет проверки:")
+                print(f"Общий процент плагиата: {report['plagiarism_score']}")
+                print("\nРезультаты по сервисам:")
+                for svc in report['services']:
+                    print(f"Сервис: {svc['name']}")
+                    print(f"Оригинальность: {svc['originality']}")
+                    print(f"Плагиат: {svc['plagiarism']}")
+                    if svc['sources']:
+                        print("Источники:")
+                        for src in svc['sources']:
+                            print(f"      - {src['name']} ({src['url']})")
+                            print(f"Оценка по отчету: {src['score_by_report']}")
+                            print(f"Оценка по источнику: {src['score_by_source']}")
+                print(f"\nАвтор: {report['author']['surname']} {report['author']['other_names']} (custom_id: {report['author']['custom_id']})")
+                if report['loan_blocks']:
+                    print("\nНайденные заимствованные блоки текста:")
+                    for i, block in enumerate(report['loan_blocks'], 1):
+                        print(f"Блок {i}:")
+                        print(f"Offset: {block['offset']}, длина: {block['length']}")
+                        print(f"Текст: {block['text'][:100]}..." if len(block['text']) > 100 else f"    Текст: {block['text']}")
+            except Exception as e:
+                print(f"Ошибка при загрузке и проверке: {e}")
+
+        elif choice == '0':
             print("Выход...")
             break
 
         else:
-            print("Неверный запрос. Введите номер пункта из меню.")
+            print("Неверный выбор. Попробуйте снова.")
