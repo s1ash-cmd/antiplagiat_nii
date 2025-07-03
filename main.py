@@ -113,7 +113,7 @@ class AntiplagiatClient:
             filename='',
             plagiarism_score=f'{report.Summary.Score:.2f}%',
             services=[],
-            author=Author(surname="", other_names="", custom_id=""),  # 👈 подчёркивание!
+            author=Author(surname="", other_names="", custom_id=""),
             loan_blocks=[]
         )
 
