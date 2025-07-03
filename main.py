@@ -113,17 +113,22 @@ class AntiplagiatClient:
             filename='',
             plagiarism_score=f'{report.Summary.Score:.2f}%',
             services=[],
-            author=Author(surname="", other_names="", custom_id=""),
+            author=Author(surname="", other_names="", custom_id="original"),
             loan_blocks=[],
             pdf_link = ''
         )
 
-
         for checkService in getattr(report, 'CheckServiceResults', []) or []:
+            logger.info(f"ScoreByReport raw: {checkService.ScoreByReport}")
+
+            score_report = checkService.ScoreByReport
+            unknown = getattr(score_report, 'Unknown', 0.0)
+            plagiarism = getattr(score_report, 'Plagiarism', 0.0)
+
             service = Service(
                 name=checkService.CheckServiceName,
-                originality=f'{checkService.ScoreByReport.Legal:.2f}%',
-                plagiarism=f'{checkService.ScoreByReport.Plagiarism:.2f}%',
+                originality=f"{unknown:.2f}%",
+                plagiarism=f"{plagiarism:.2f}%",
                 sources=[]
             )
 
@@ -192,7 +197,6 @@ class AntiplagiatClient:
         pdf_path = self.download_report(exportReportInfo.DownloadLink, f"report_{doc_id.Id}.pdf")
         print(f"PDF отчёт сохранён: {pdf_path}")
 
-
         result.pdf_link = f"{self.antiplagiat_uri}{exportReportInfo.DownloadLink}"
 
         return result.model_dump()
@@ -227,15 +231,13 @@ if __name__ == "__main__":
             filename = input("Введите название файла для индексации: ")
             author_surname = input("Введите фамилию автора: ")
             author_other_names = input("Введите имя автора: ")
-            external_user_id = input("Введите внешний ID пользователя: ")
-            custom_id = input("Введите пользовательский ID (custom_id): ")
             try:
                 doc_id = client.add_to_index(
                     filename,
                     author_surname=author_surname,
                     author_other_names=author_other_names,
                     external_user_id=external_user_id,
-                    custom_id=custom_id
+                    custom_id = "original"
                 )
                 print(f"Идентификатор добавленного в индекс документа: {doc_id.Id}")
             except Exception as e:
@@ -253,19 +255,7 @@ if __name__ == "__main__":
                     print(f"Сервис: {svc['name']}")
                     print(f"Оригинальность: {svc['originality']}")
                     print(f"Плагиат: {svc['plagiarism']}")
-                    if svc['sources']:
-                        print("    Источники:")
-                        for src in svc['sources']:
-                            print(f"      - {src['name']} ({src['url']})")
-                            print(f"Оценка по отчету: {src['score_by_report']}")
-                            print(f"Оценка по источнику: {src['score_by_source']}")
-                print(f"\nАвтор: {report['author']['surname']} {report['author']['other_names']} (custom_id: {report['author']['custom_id']})")
-                if report['loan_blocks']:
-                    print("\nНайденные заимствованные блоки текста:")
-                    for i, block in enumerate(report['loan_blocks'], 1):
-                        print(f"Блок {i}:")
-                        print(f"Offset: {block['offset']}, длина: {block['length']}")
-                        print(f"Текст: {block['text'][:100]}..." if len(block['text']) > 100 else f"    Текст: {block['text']}")
+
             except Exception as e:
                 print(f"Ошибка при проверке: {e}")
 
@@ -275,7 +265,6 @@ if __name__ == "__main__":
             author_surname = input("Введите фамилию автора: ")
             author_other_names = input("Введите имя автора: ")
             external_user_id = input("Введите внешний ID пользователя: ")
-            custom_id = input("Введите пользовательский ID (custom_id): ")
             try:
                 # Индексируем и получаем объект DocumentId
                 doc_id = client.add_to_index(
@@ -283,7 +272,7 @@ if __name__ == "__main__":
                     author_surname=author_surname,
                     author_other_names=author_other_names,
                     external_user_id=external_user_id,
-                    custom_id=custom_id
+                    custom_id="original"
                 )
                 print(f"Документ добавлен в индекс с ID: {doc_id.Id}")
 
@@ -296,19 +285,7 @@ if __name__ == "__main__":
                     print(f"Сервис: {svc['name']}")
                     print(f"Оригинальность: {svc['originality']}")
                     print(f"Плагиат: {svc['plagiarism']}")
-                    if svc['sources']:
-                        print("Источники:")
-                        for src in svc['sources']:
-                            print(f"      - {src['name']} ({src['url']})")
-                            print(f"Оценка по отчету: {src['score_by_report']}")
-                            print(f"Оценка по источнику: {src['score_by_source']}")
-                print(f"\nАвтор: {report['author']['surname']} {report['author']['other_names']} (custom_id: {report['author']['custom_id']})")
-                if report['loan_blocks']:
-                    print("\nНайденные заимствованные блоки текста:")
-                    for i, block in enumerate(report['loan_blocks'], 1):
-                        print(f"Блок {i}:")
-                        print(f"Offset: {block['offset']}, длина: {block['length']}")
-                        print(f"Текст: {block['text'][:100]}..." if len(block['text']) > 100 else f"    Текст: {block['text']}")
+
             except Exception as e:
                 print(f"Ошибка при загрузке и проверке: {e}")
 
