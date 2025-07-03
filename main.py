@@ -119,10 +119,16 @@ class AntiplagiatClient:
         )
 
         for checkService in getattr(report, 'CheckServiceResults', []) or []:
+            logger.info(f"ScoreByReport raw: {checkService.ScoreByReport}")
+
+            score_report = checkService.ScoreByReport
+            unknown = getattr(score_report, 'Unknown', 0.0)
+            plagiarism = getattr(score_report, 'Plagiarism', 0.0)
+
             service = Service(
                 name=checkService.CheckServiceName,
-                originality=f'{checkService.ScoreByReport.Legal:.2f}%',
-                plagiarism=f'{checkService.ScoreByReport.Plagiarism:.2f}%',
+                originality=f"{unknown:.2f}%",
+                plagiarism=f"{plagiarism:.2f}%",
                 sources=[]
             )
 
