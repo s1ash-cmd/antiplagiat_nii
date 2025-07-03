@@ -266,7 +266,6 @@ if __name__ == "__main__":
             author_other_names = input("Введите имя автора: ")
             external_user_id = input("Введите внешний ID пользователя: ")
             try:
-                # Индексируем и получаем объект DocumentId
                 doc_id = client.add_to_index(
                     filename,
                     author_surname=author_surname,
@@ -276,7 +275,6 @@ if __name__ == "__main__":
                 )
                 print(f"Документ добавлен в индекс с ID: {doc_id.Id}")
 
-                # Проверяем документ
                 report = client.check_by_id(doc_id)
                 print("\nОтчет проверки:")
                 print(f"Общий процент плагиата: {report['plagiarism_score']}")
