@@ -231,6 +231,7 @@ if __name__ == "__main__":
             filename = input("Введите название файла для индексации: ")
             author_surname = input("Введите фамилию автора: ")
             author_other_names = input("Введите имя автора: ")
+            external_user_id = input("Введите внешний ID пользователя: ")
             try:
                 doc_id = client.add_to_index(
                     filename,
