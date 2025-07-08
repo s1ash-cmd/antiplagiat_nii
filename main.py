@@ -108,14 +108,32 @@ class AntiplagiatClient:
 
         report = self.client.service.GetReportView(doc_id)
         logger.info(f"Report Summary: {report.Summary.Score:.2f}%")
+        logger.info(f"Report attributes: {dir(report)}")
+
+        options = self.factory.ReportViewOptions(
+            FullReport=True,
+            NeedText=True,
+            NeedStats=True,
+            NeedAttributes=True
+        )
+
+        fullreport = self.client.service.GetReportView(doc_id, options)
+        logger.info(f"DocumentDescription attributes: {dir(fullreport.Attributes.DocumentDescription)}")
+        if hasattr(fullreport.Attributes.DocumentDescription, 'Work'):
+            logger.info(f"Work field content: {fullreport.Attributes.DocumentDescription.Work}")
+
+        filename = getattr(fullreport.Attributes.DocumentDescription, 'Work', 'unknown')
+        if filename != 'unknown' and hasattr(fullreport.Attributes.DocumentDescription, 'FileType'):
+            filename = f"{filename}{getattr(fullreport.Attributes.DocumentDescription, 'FileType', '')}"
+        print(f"Имя файла, полученное от сервера: {filename}")
 
         result = SimpleCheckResult(
-            filename='',
+            filename=filename,
             plagiarism_score=f'{report.Summary.Score:.2f}%',
             services=[],
             author=Author(surname="", other_names="", custom_id="original"),
             loan_blocks=[],
-            pdf_link = ''
+            pdf_link=''
         )
 
         for checkService in getattr(report, 'CheckServiceResults', []) or []:
@@ -157,15 +175,6 @@ class AntiplagiatClient:
 
             result.services.append(service)
 
-        options = self.factory.ReportViewOptions(
-            FullReport=True,
-            NeedText=True,
-            NeedStats=True,
-            NeedAttributes=True
-        )
-
-        fullreport = self.client.service.GetReportView(doc_id, options)
-
         author_info = fullreport.Attributes.DocumentDescription.Authors.AuthorName[0]
         result.author.surname = author_info.Surname
         result.author.other_names = author_info.OtherNames
@@ -183,8 +192,8 @@ class AntiplagiatClient:
 
         result.loan_blocks = loan_blocks
 
-        # Запросить формирование последнего полного отчета в формат PDF.
         exportReportInfo = self.client.service.ExportReportToPdf(doc_id)
+        logger.info(f"ExportReportInfo attributes: {dir(exportReportInfo)}")
 
         while exportReportInfo.Status == "InProgress":
             time.sleep(max(exportReportInfo.EstimatedWaitTime, 10) * 0.1)
@@ -231,6 +240,7 @@ if __name__ == "__main__":
             filename = input("Введите название файла для индексации: ")
             author_surname = input("Введите фамилию автора: ")
             author_other_names = input("Введите имя автора: ")
+            external_user_id = input("Введите внешний ID пользователя: ")
             try:
                 doc_id = client.add_to_index(
                     filename,
@@ -266,7 +276,6 @@ if __name__ == "__main__":
             author_other_names = input("Введите имя автора: ")
             external_user_id = input("Введите внешний ID пользователя: ")
             try:
-                # Индексируем и получаем объект DocumentId
                 doc_id = client.add_to_index(
                     filename,
                     author_surname=author_surname,
@@ -276,7 +285,6 @@ if __name__ == "__main__":
                 )
                 print(f"Документ добавлен в индекс с ID: {doc_id.Id}")
 
-                # Проверяем документ
                 report = client.check_by_id(doc_id)
                 print("\nОтчет проверки:")
                 print(f"Общий процент плагиата: {report['plagiarism_score']}")
